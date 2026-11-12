@@ -39,7 +39,7 @@ if(OS_ANDROID)
   #                       五项 —— camera2ndk 是 NDK 桩库，运行时由 linker 从系统分区取真身，
   #                       所以 APK 里不多一枚 .so，打包账不变。28 条 UNDEF 里 OBS 域**未解析 0 条**
   #                       （"等 dlopen 才炸"那类坑静态排掉），Camera2 侧 7 条 ACameraManager_*/
-  #                       ACameraMetadata_* 由桩库提供；装载清单 android-plugin-modules.h 已含 "android-camera"。
+  #                       ACameraMetadata_* 由桩库提供；Android 插件白名单已含 "android-camera"。
   #   android-screen   —— P-18：屏幕采集源（MediaProjection）。依赖面与相机同一档：只链 OBS::libobs
   #                       + 裸名 mediandk（AImageReader_* / AImage_* 都在 libmediandk.so 那枚桩库里，
   #                       运行时由 linker 从系统分区取真身，APK 里不多一枚 .so）。

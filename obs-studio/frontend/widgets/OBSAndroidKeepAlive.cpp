@@ -2,7 +2,8 @@
 
 #ifdef __ANDROID__
 
-#include <QJniEnvironment>
+#include <utility/android-jni.hpp>
+
 #include <QJniObject>
 
 #include <mutex>
@@ -13,14 +14,6 @@
 /* Java 侧宿主（frontend/cmake/android/java/com/obsproject/studio/ObsForegroundService.java）
  * 全是 public static，和 ObsDisplayHost 一样只走 callStaticMethod。 */
 static const char kServiceClass[] = "com/obsproject/studio/ObsForegroundService";
-
-/* 必须是 Activity：QtNative.activity() 是这套里唯一稳定的 Context 来源（同 OBSAndroidDisplay.cpp），
- * Java 侧立刻 getApplicationContext()，不把 Activity 引用留在静态字段上。 */
-static QJniObject hostActivity()
-{
-	return QJniObject::callStaticObjectMethod("org/qtproject/qt/android/QtNative", "activity",
-						  "()Landroid/app/Activity;");
-}
 
 static QString callDescribe()
 {
@@ -50,7 +43,7 @@ bool obsAndroidKeepAliveSetRunning(bool running, const char *state, QString *det
 {
     CaptureSources sources;
     obs_enum_sources(collectCaptureSource, &sources);
-    const QJniObject activity = hostActivity();
+    const QJniObject activity = AndroidJni::activity();
     const bool capture = activity.isValid() &&
         QJniObject::callStaticMethod<jboolean>(kServiceClass, "setCaptureSources",
             "(Landroid/content/Context;ZZ)Z", activity.object<jobject>(),
@@ -78,7 +71,7 @@ bool obsAndroidKeepAliveSetRunning(bool running, const char *state, QString *det
 		return true;
 	}
 
-	const QJniObject act = hostActivity();
+	const QJniObject act = AndroidJni::activity();
 	if (!act.isValid()) {
 		if (detail)
 			*detail = QStringLiteral("拿不到 QtNative.activity() —— 前台服务没起来");
