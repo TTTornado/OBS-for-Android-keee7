@@ -242,6 +242,15 @@ static void audioReleaseScratch()
 static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *channels)
 {
 	(void)param;
+	/* 先确认当前线程有 JNIEnv，再调用 Java startAudio：把“Java 已经启动 AudioRecord、
+	 * 但 native 读不到返回值”的窗口压到零。 */
+	QJniEnvironment env;
+	JNIEnv *je = AndroidJni::env(env);
+	if (!je) {
+		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录起不来：当前线程没有可用的 JNIEnv");
+		return false;
+	}
+
 	const QJniObject arr = QJniObject::callStaticObjectMethod(kProjectionClass, "startAudio", "()[I");
 	if (!arr.isValid()) {
 		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录起不来（startAudio 返回 null），Java 侧=%s",
@@ -249,19 +258,23 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 		return false;
 	}
 
-	QJniEnvironment env;
-	JNIEnv *je = AndroidJni::env(env);
-	if (!je) {
-		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录格式读不到：当前线程没有可用的 JNIEnv");
+	/* startAudio 已经成功（返回了数组）之后，任何失败都必须把 Java 侧 AudioRecord 停掉，
+	 * 否则调用方只看到 false，Java 侧的录音线程仍在跑。 */
+	bool scratch_created = false;
+	auto fail_start = [&]() -> bool {
+		QJniObject::callStaticMethod<void>(kProjectionClass, "stopAudio", "()V");
+		if (scratch_created)
+			audioReleaseScratch();
 		return false;
-	}
+	};
+
 	const jintArray ja = arr.object<jintArray>();
 	const jsize n = je->GetArrayLength(ja);
 	jint *els = (n >= 2) ? je->GetIntArrayElements(ja, nullptr) : nullptr;
 	if (!els) {
-		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录格式读不到（数组长度=%d），Java 侧=%s", (int)n,
+		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录格式读不到（数组长度=%d，Java 侧=%s）", (int)n,
 		     screenDescribe().toUtf8().constData());
-		return false;
+		return fail_start();
 	}
 	const jint rate = els[0];
 	const jint ch = els[1];
@@ -270,10 +283,10 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 	if (rate <= 0 || ch <= 0) {
 		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录格式不成立 %dHz×%d，Java 侧=%s", (int)rate,
 		     (int)ch, screenDescribe().toUtf8().constData());
-		return false;
+		return fail_start();
 	}
 
-	/* 缓冲按"一秒"建：48k 立体声 = 96000 个 short = 192 KB，一次性的代价，换来读那一格零分配。
+	/* 缓冲按“一秒”建：48k 立体声 = 96000 个 short = 192 KB，一次性的代价，换来读那一格零分配。
 	 * 幂等的第二发（或 Java 侧换了格式）走到这里：容量够就沿用，不够就销旧建新 —— 不销就是每换一次
 	 * 漏一枚 global ref。 */
 	const jsize need = (jsize)(rate * ch);
@@ -282,16 +295,18 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 	if (!g_audioScratch) {
 		jshortArray fresh = je->NewShortArray(need);
 		if (!fresh) {
-			/* 缓冲给不出来就别把 AudioRecord 留在场上：那一头已经起了读线程，
-			 * 让它跟着这一格一起回去，两侧才还是一致的。 */
-			QJniObject::callStaticMethod<void>(kProjectionClass, "stopAudio", "()V");
 			blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录缓冲建不出来（%d 个 short）", (int)need);
-			return false;
+			return fail_start();
 		}
 		g_audioScratch = (jshortArray)je->NewGlobalRef(fresh);
 		je->DeleteLocalRef(fresh);
+		if (!g_audioScratch) {
+			blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录缓冲 global ref 建不出来");
+			return fail_start();
+		}
 		g_audioScratchShorts = need;
 		g_audioScratchChannels = (uint32_t)ch;
+		scratch_created = true;
 	}
 
 	if (sample_rate)
@@ -303,8 +318,6 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 	return true;
 }
 
-/* 与 release_consent 那格同样的"幂等 + 只在真做了事的那一发记日志"：Java 侧 stopAudio 手里没录音
- * 时是空转，所以这一格也不返回成败（结构体里就是这么定的）。 */
 static void screenStopAudio(void *param)
 {
 	(void)param;
