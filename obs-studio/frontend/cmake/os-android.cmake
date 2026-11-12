@@ -26,6 +26,9 @@ target_sources(
     widgets/OBSAndroidKeepAlive.cpp
     # 3-5：一期运行时权限申请（Java 侧 .../ObsPermissionHost.java）。
     widgets/OBSAndroidPermissions.cpp
+    widgets/OBSAndroidCameraHost.cpp
+    widgets/OBSAndroidScreenHost.cpp
+    widgets/OBSAndroidScreenGpuHost.cpp
     # USB host 总线（obs_android_usb_*）的前端注册（Java 侧 .../ObsUsbHost.java，
     # 自 android-shell/obs_usb_host.cpp 移植），给 android-capture 的 UVC 源用。
     widgets/OBSAndroidBrowser.cpp

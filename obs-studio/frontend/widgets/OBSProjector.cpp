@@ -2,6 +2,7 @@
 
 #include <OBSApp.hpp>
 #include <components/Multiview.hpp>
+#include <utility/AndroidMenuPos.hpp>
 #include <utility/display-helpers.hpp>
 #include <utility/platform.hpp>
 #include <widgets/OBSBasic.hpp>
@@ -337,7 +338,7 @@ void OBSProjector::mousePressEvent(QMouseEvent *event)
 		 * setPos 又是空操作（19:03 实测 setPos(533,333) 后 pos() 仍是上一次 tap 的 377,279），
 		 * 菜单会弹到手指之外去 —— 而这个菜单是投影仪唯一能触摸关掉它的入口。
 		 * 桌面端鼠标按下点 == 光标点，语义不变。 */
-		popup.exec(event->globalPosition().toPoint());
+		popup.exec(OBSMenuPosFromEvent(event->globalPosition().toPoint()));
 	} else if (event->button() == Qt::LeftButton) {
 		// Only MultiView projectors handle left click
 		if (this->type != ProjectorType::Multiview) {

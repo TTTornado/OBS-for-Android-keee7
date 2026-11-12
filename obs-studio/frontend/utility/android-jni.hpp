@@ -9,11 +9,13 @@
  * every Java API. Callers fetch the object they need at the point of use. */
 
 #include <QByteArray>
+#include <QJniEnvironment>
 #include <QJniObject>
 #include <QString>
 
 #include <cstddef>
 #include <cstring>
+#include <jni.h>
 
 namespace AndroidJni {
 
@@ -35,6 +37,14 @@ inline QJniObject context()
 inline QString toString(const QJniObject &value)
 {
 	return value.isValid() ? value.toString() : QString();
+}
+
+/* Return the JNIEnv only when Qt successfully attached the current thread.
+ * Callers must treat nullptr as an ordinary failure (return false/-1/0), never
+ * dereference an invalid QJniEnvironment. */
+inline JNIEnv *env(QJniEnvironment &environment)
+{
+	return environment.isValid() ? environment.jniEnv() : nullptr;
 }
 
 inline void copyUtf8(char *dst, size_t dstLen, const QString &src)

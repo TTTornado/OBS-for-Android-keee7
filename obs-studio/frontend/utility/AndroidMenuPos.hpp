@@ -47,6 +47,18 @@ inline QPoint OBSMenuPos(const QPoint &androidGlobalPos)
 	return QCursor::pos();
 }
 
+/* 事件坐标版：Android 用事件给出的全局坐标，桌面端原样返回事件坐标。
+ * 专给"右键事件已经带了准确位置"的调用点用（如 OBSProjector），避免为了统一入口
+ * 把桌面端原有的 event->globalPosition() 语义改成 QCursor::pos()。 */
+inline QPoint OBSMenuPosFromEvent(const QPoint &eventGlobalPos)
+{
+#ifdef __ANDROID__
+	return OBSMenuPos(eventGlobalPos);
+#else
+	return eventGlobalPos;
+#endif
+}
+
 // 便捷版：按控件锚定 —— 菜单挂在控件下缘（等于桌面端"点按钮开菜单时光标就在那儿"的观感）。
 // 控件不可见/还没布局时返回 (-1,-1) 让上面那个哨兵去兜底。
 inline QPoint OBSMenuPosBelow(const QWidget *anchor)
