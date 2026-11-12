@@ -260,11 +260,12 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 
 	/* startAudio 已经成功（返回了数组）之后，任何失败都必须把 Java 侧 AudioRecord 停掉，
 	 * 否则调用方只看到 false，Java 侧的录音线程仍在跑。 */
-	bool scratch_created = false;
 	auto fail_start = [&]() -> bool {
+		/* Raw JNI calls can leave an exception pending (for example OOM).
+		 * Clear it before making the Java call that stops AudioRecord. */
+		if (je->ExceptionCheck())
+			je->ExceptionClear();
 		QJniObject::callStaticMethod<void>(kProjectionClass, "stopAudio", "()V");
-		if (scratch_created)
-			audioReleaseScratch();
 		return false;
 	};
 
@@ -272,8 +273,7 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 	const jsize n = je->GetArrayLength(ja);
 	jint *els = (n >= 2) ? je->GetIntArrayElements(ja, nullptr) : nullptr;
 	if (!els) {
-		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录格式读不到（数组长度=%d，Java 侧=%s）", (int)n,
-		     screenDescribe().toUtf8().constData());
+		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录格式读不到（数组长度=%d）", (int)n);
 		return fail_start();
 	}
 	const jint rate = els[0];
@@ -306,7 +306,6 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 		}
 		g_audioScratchShorts = need;
 		g_audioScratchChannels = (uint32_t)ch;
-		scratch_created = true;
 	}
 
 	if (sample_rate)
