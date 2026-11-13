@@ -52,8 +52,12 @@ if(OS_ANDROID)
   # 所以这里只能先单独 find 一次 Core。find_package 重复调用是安全的（组件是累加的）。
   # Require the Android IME implementation used by CI. Older local Qt kits
   # restart fullscreen input on deletion and use different handle coordinates.
+  # APK packaging is explicitly orchestrated by the packaging scripts after plugin
+  # .so staging and Qt6Android.jar patching, so keep Qt's auto-generated APK
+  # targets out of the default ALL build graph.
+  set(QT_NO_GLOBAL_APK_TARGET_PART_OF_ALL ON)
   find_package(Qt6 6.11.1 REQUIRED COMPONENTS Core)
-  qt_add_executable(obs-studio)
+  qt_add_executable(obs-studio MANUAL_FINALIZATION)
 else()
   add_executable(obs-studio)
 endif()
@@ -171,3 +175,12 @@ else()
 endif()
 
 set_target_properties_obs(obs-studio PROPERTIES FOLDER frontend OUTPUT_NAME "${obs_output_name}")
+
+if(OS_ANDROID)
+  qt_finalize_target(obs-studio)
+  foreach(_qt_apk_target IN ITEMS obs-studio_make_apk obs-studio_make_aab apk aab)
+    if(TARGET ${_qt_apk_target})
+      set_target_properties(${_qt_apk_target} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    endif()
+  endforeach()
+endif()

@@ -171,6 +171,7 @@ message(STATUS "P-1 装载：android-plugin-modules.h 生成，插件数=${_obs_
 # android-shell/CMakeLists.txt:51-53）。
 set(_extra_libs "")
 if(TARGET OBS::libobs-opengl)
+  add_dependencies(obs-studio OBS::libobs-opengl)
   get_target_property(_gs_dir OBS::libobs-opengl BINARY_DIR)
   set(_gs_backend "${_gs_dir}/libobs-opengl.so")
   list(APPEND _extra_libs "${_gs_backend}")
