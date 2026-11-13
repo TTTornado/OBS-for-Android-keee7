@@ -4,21 +4,18 @@
 
 #include <qt-wrappers.hpp> // OBSMessageBox
 
+#include <utility/android-jni.hpp>
+
 #include <QApplication>
 #include <QClipboard>
 #include <QJniObject>
 #include <obs-android.h>
 
 static constexpr auto storageClass = "com/obsproject/studio/ObsStorageHost";
-static QJniObject storageContext()
-{
-	return QJniObject::callStaticObjectMethod("org/qtproject/qt/android/QtNative", "getContext",
-						"()Landroid/content/Context;");
-}
 
 static int openDocument(const char *path, const char *mode)
 {
-	auto context = storageContext();
+	auto context = AndroidJni::context();
 	if (!context.isValid())
 		return -1;
 	auto uri = QJniObject::fromString(QString::fromUtf8(path));
@@ -42,7 +39,7 @@ bool obsAndroidStorageManaged(const QString &path)
 
 bool obsAndroidStorageWritable(const QString &path)
 {
-	auto context = storageContext();
+	auto context = AndroidJni::context();
 	if (!context.isValid())
 		return false;
 	auto p = QJniObject::fromString(path);
@@ -52,7 +49,7 @@ bool obsAndroidStorageWritable(const QString &path)
 
 QString obsAndroidStorageCreate(const QString &path, const QString &name)
 {
-	auto context = storageContext();
+	auto context = AndroidJni::context();
 	if (!context.isValid())
 		return {};
 	auto p = QJniObject::fromString(path);
@@ -64,7 +61,7 @@ QString obsAndroidStorageCreate(const QString &path, const QString &name)
 
 qint64 obsAndroidStorageSpace(const QString &path)
 {
-	auto context = storageContext();
+	auto context = AndroidJni::context();
 	if (!context.isValid())
 		return -1;
 	auto p = QJniObject::fromString(path);

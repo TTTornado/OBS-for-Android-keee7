@@ -68,6 +68,8 @@ public final class ObsForegroundService extends Service {
     private static volatile String lastState = "<idle>";
     private static volatile String lastError = "<none>";
     private static volatile boolean wakeLockHeld = false;
+    /** startForeground() 是否真的成功过；start() 返回 true 只代表请求已发出，不代表这一格。 */
+    private static volatile boolean foregroundReady = false;
     /** 最近一次真的传给 startForeground() 的类型串；API 33 及以下不按类型推，所以留 <none> */
     private static volatile String lastPromoteType = "<none>";
     /** 等"服务已带投影档"这一步的续体（只有一条活动投影 ⇒ 一个格子够） */
@@ -147,6 +149,7 @@ public final class ObsForegroundService extends Service {
         try {
             ctx.getApplicationContext().stopService(new Intent(ctx.getApplicationContext(),
                                                                ObsForegroundService.class));
+            foregroundReady = false;
             Log.i(TAG, "stopService #" + stopRequests);
             return true;
         } catch (Throwable t) {
@@ -160,12 +163,14 @@ public final class ObsForegroundService extends Service {
     public static synchronized String describe() {
         return "start=" + startRequests + " stop=" + stopRequests + " created=" + createdCount
                + " destroyed=" + destroyedCount + " running=" + (instance != null)
+               + " foregroundReady=" + foregroundReady
                + " state=" + lastState + " 类型=" + lastPromoteType + " wakelock=" + wakeLockHeld
                + " err=" + lastError;
     }
 
-    public static synchronized boolean isRunning() {
-        return instance != null;
+    /** service 实例存在不等于前台档已落定；native watchdog 应看这一格。 */
+    public static synchronized boolean isForegroundReady() {
+        return instance != null && foregroundReady;
     }
 
     /**
@@ -240,6 +245,7 @@ public final class ObsForegroundService extends Service {
     @Override
     public void onDestroy() {
         destroyedCount++;
+        foregroundReady = false;
         releaseWakeLock();
         if (nm != null)
             nm.cancel(NOTIF_ID);
@@ -300,6 +306,7 @@ public final class ObsForegroundService extends Service {
             type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
             typeName += "|microphone";
         }
+        foregroundReady = false;
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(NOTIF_ID, n, type);
@@ -319,9 +326,11 @@ public final class ObsForegroundService extends Service {
             promotedCamera = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && camera;
             promotedMicrophone = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && microphone;
             lastError = "<none>";
+            foregroundReady = true;
             Log.i(TAG, "startForeground 类型=" + typeName);
             return true;
         } catch (Throwable t) {
+            foregroundReady = false;
             lastError = "startForeground 抛异常: " + t;
             Log.e(TAG, lastError, t);
             return false;

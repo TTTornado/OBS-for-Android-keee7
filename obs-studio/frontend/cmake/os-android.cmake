@@ -13,6 +13,7 @@ target_sources(
   PRIVATE
     utility/AndroidCodecCapabilities.cpp
     utility/AndroidRuntimeBootstrap.cpp
+    utility/android-input-filter.cpp
     utility/CrashHandler_Android.cpp
     utility/NativeEventFilter.cpp
     utility/platform-android.cpp
@@ -25,6 +26,9 @@ target_sources(
     widgets/OBSAndroidKeepAlive.cpp
     # 3-5：一期运行时权限申请（Java 侧 .../ObsPermissionHost.java）。
     widgets/OBSAndroidPermissions.cpp
+    widgets/OBSAndroidCameraHost.cpp
+    widgets/OBSAndroidScreenHost.cpp
+    widgets/OBSAndroidScreenGpuHost.cpp
     # USB host 总线（obs_android_usb_*）的前端注册（Java 侧 .../ObsUsbHost.java，
     # 自 android-shell/obs_usb_host.cpp 移植），给 android-capture 的 UVC 源用。
     widgets/OBSAndroidBrowser.cpp
@@ -136,9 +140,7 @@ if(NOT _obs_plugin_modules)
   get_property(_obs_plugin_modules GLOBAL PROPERTY OBS_MODULES_ENABLED)
 endif()
 set(_obs_plugin_data_dirs "")
-set(OBS_ANDROID_PLUGIN_MODULE_ENTRIES "")
 foreach(_m IN LISTS _obs_plugin_modules)
-  string(APPEND OBS_ANDROID_PLUGIN_MODULE_ENTRIES "  \"${_m}\",\n")
   get_target_property(_m_src ${_m} SOURCE_DIR)
   if(_m_src AND EXISTS "${_m_src}/data")
     file(GLOB_RECURSE _m_files CONFIGURE_DEPENDS "${_m_src}/data/*")
@@ -155,15 +157,9 @@ foreach(_m IN LISTS _obs_plugin_modules)
   endif()
 endforeach()
 list(JOIN _obs_plugin_data_dirs " " _obs_plugin_data_dirs)
-message(STATUS "P-1 打包：插件数据进 APK 资源 = ${_obs_plugin_data_dirs}（候选模块 ${_obs_plugin_modules}）")
 
-# 装载清单：OBSApp::loadAppModules() 的 Android 分支按这张表逐个裸名 dlopen（表的内容见模板注释）。
-# 没有它的话插件"进得了 APK、进不了 obs"—— 实测：只进白名单不装载时，转场列表为空、
-# channel 0 上没有转场源，切场景仍走 3-4 的直挂兜底分支。
-string(STRIP "${OBS_ANDROID_PLUGIN_MODULE_ENTRIES}" OBS_ANDROID_PLUGIN_MODULE_ENTRIES)
-configure_file(cmake/templates/android-plugin-modules.h.in android-plugin-modules.h NEWLINE_STYLE LF)
 list(LENGTH _obs_plugin_modules _obs_plugin_module_count)
-message(STATUS "P-1 装载：android-plugin-modules.h 生成，插件数=${_obs_plugin_module_count}")
+message(STATUS "P-1 打包：插件数据资源 = ${_obs_plugin_data_dirs}（候选模块数=${_obs_plugin_module_count}）")
 
 # 渲染后端不参与链接（obs_reset_video 时 os_dlopen("libobs-opengl")），所以只有列进
 # EXTRA_LIBS 才会被 androiddeployqt 打进 APK 的 lib/<abi>/。文件名本来就以 lib 开头，

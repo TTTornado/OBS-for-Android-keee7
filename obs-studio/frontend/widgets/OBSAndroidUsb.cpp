@@ -4,11 +4,9 @@
 
 #include <obs.h> // obs_android_set_usb_host / struct obs_android_usb_device
 
-#include <QByteArray>
-#include <QStringList>
-#include <QJniObject>
+#include <utility/android-jni.hpp>
 
-#include <cstring>
+#include <QStringList>
 
 /* 自 android-shell/obs_usb_host.cpp 忠实移植，改动只有两处：
  *   * Java 类名从 org/qtproject/example/obs_shell/ObsUsbHost 换成 com/obsproject/studio/ObsUsbHost；
@@ -19,40 +17,6 @@
  * 全是 public static 方法，所以只用 QJniObject::callStaticObjectMethod / callStaticMethod。 */
 static const char kUsbHostClass[] = "com/obsproject/studio/ObsUsbHost";
 
-static QString jstringToQString(const QJniObject &s)
-{
-	if (!s.isValid())
-		return QString();
-	return s.toString();
-}
-
-/* A1/A2 实测过 Qt 6.9.3 的暴露方式：org/qtproject/qt/android/QtNative 的
- * static Context getContext() / static Activity activity()（不是 Kotlin 属性名）。
- * 这里只要通用 Context（registerReceiver/openDevice 都是 Context 的方法），两个口哪个通拿哪个。 */
-static QJniObject appContext()
-{
-	QJniObject ctx;
-	const char *const getters[] = {"getContext", "activity"};
-	for (const char *g : getters) {
-		ctx = QJniObject::callStaticObjectMethod("org/qtproject/qt/android/QtNative", g,
-							 "()Landroid/content/Context;");
-		if (ctx.isValid())
-			break;
-	}
-	return ctx;
-}
-
-static void copyField(char *dst, size_t dstLen, const QString &src)
-{
-	if (!dst || dstLen == 0)
-		return;
-	const QByteArray utf8 = src.toUtf8();
-	const size_t cap = dstLen - 1;
-	const size_t n = (size_t)utf8.size() < cap ? (size_t)utf8.size() : cap;
-	memcpy(dst, utf8.constData(), n);
-	dst[n] = '\0';
-}
-
 /* --- obs_android_usb_host 回调：把 Java 的返回串拆成固定长结构体 ---------------- */
 
 static int jbGetDevices(void *param, struct obs_android_usb_device *out, int max)
@@ -62,7 +26,7 @@ static int jbGetDevices(void *param, struct obs_android_usb_device *out, int max
 	if (!snap.isValid())
 		return -1;
 
-	const QString joined = jstringToQString(snap);
+	const QString joined = AndroidJni::toString(snap);
 	if (joined.isEmpty())
 		return 0; // 没有设备是正常状态，不是错误
 
@@ -74,8 +38,8 @@ static int jbGetDevices(void *param, struct obs_android_usb_device *out, int max
 		const QStringList f = e.split(QLatin1Char('|'));
 		if (f.size() < 3)
 			continue; // 协议被 Java 侧改坏了，宁可不给也不猜
-		copyField(out[n].name, sizeof(out[n].name), f.at(0));
-		copyField(out[n].label, sizeof(out[n].label), f.at(1));
+		AndroidJni::copyUtf8(out[n].name, sizeof(out[n].name), f.at(0));
+		AndroidJni::copyUtf8(out[n].label, sizeof(out[n].label), f.at(1));
 		out[n].has_permission = f.at(2) == QLatin1String("1");
 		n++;
 	}
@@ -125,7 +89,7 @@ bool obsAndroidUsbRegisterBus(QString *detail)
 	}
 	s_bus_registered = true;
 
-	const QJniObject ctx = appContext();
+	const QJniObject ctx = AndroidJni::context();
 	if (!ctx.isValid()) {
 		const QString line = QStringLiteral("USB 宿主未安装：QtNative.getContext()/activity() 都拿不到 Context");
 		if (detail)

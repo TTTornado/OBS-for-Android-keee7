@@ -3,6 +3,10 @@
 #include <QScrollBar>
 #include <QTimer>
 
+#ifdef __ANDROID__
+#include <utility/android-layout-policy.hpp>
+#endif
+
 #include "moc_SceneTree.cpp"
 
 SceneTree::SceneTree(QWidget *parent_) : QListWidget(parent_)
@@ -26,7 +30,7 @@ void SceneTree::SetGridMode(bool grid)
 		setViewMode(QListView::ListMode);
 		setResizeMode(QListView::Fixed);
 #ifdef __ANDROID__
-		const int rowHeight = property("androidCompactLayout").toBool() ? 32 : 48;
+		const int rowHeight = OBSAndroidLayout::touchRowHeight(property("androidCompactLayout").toBool());
 		setStyleSheet(QStringLiteral("QListView::item { min-height: %1px; padding-top: 0px; padding-bottom: 0px; }")
 				      .arg(rowHeight));
 #else

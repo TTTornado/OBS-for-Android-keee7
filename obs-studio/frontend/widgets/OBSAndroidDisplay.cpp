@@ -2,6 +2,8 @@
 
 #ifdef __ANDROID__
 
+#include <utility/android-jni.hpp>
+
 #include <QJniEnvironment>
 #include <QJniObject>
 #include <QPointer>
@@ -26,18 +28,7 @@ static const char kDisplayHostClass[] = "com/obsproject/studio/ObsDisplayHost";
 
 /* 必须是 Activity，不能退化成 Context：addContentView 只在 Activity 上（S1 实测，
  * .qoder/s1-display-api.log）。这一点和 USB/音频宿主不同 —— 那两个只要 Context。 */
-static QJniObject hostActivity()
-{
-	return QJniObject::callStaticObjectMethod("org/qtproject/qt/android/QtNative", "activity",
-						  "()Landroid/app/Activity;");
-}
 
-static QString jstringToQString(const QJniObject &s)
-{
-	if (!s.isValid())
-		return QString();
-	return s.toString();
-}
 
 static int callInt(const char *method)
 {
@@ -46,7 +37,7 @@ static int callInt(const char *method)
 
 static QString callString(const char *method)
 {
-	return jstringToQString(QJniObject::callStaticObjectMethod(kDisplayHostClass, method, "()Ljava/lang/String;"));
+	return AndroidJni::toString(QJniObject::callStaticObjectMethod(kDisplayHostClass, method, "()Ljava/lang/String;"));
 }
 
 /* 和 ObsDisplayHost.java 里的 TAG 同一个字符串：一条 `logcat -s OBS-display` 就能把
@@ -338,7 +329,7 @@ bool obsAndroidDisplayAttach(int x, int y, int w, int h, QString *detail)
 	// 调未注册的原生方法抛 UnsatisfiedLinkError。call_once，注册一次即可。
 	ensureSurfaceNativesRegistered();
 
-	const QJniObject act = hostActivity();
+	const QJniObject act = AndroidJni::activity();
 	if (!act.isValid()) {
 		if (detail)
 			*detail = QStringLiteral("拿不到 QtNative.activity() —— 预览面不会建起来");
@@ -358,7 +349,7 @@ bool obsAndroidDisplayAttach(int x, int y, int w, int h, QString *detail)
 
 bool obsAndroidDisplayUpdateRect(int x, int y, int w, int h, QString *detail)
 {
-	const QJniObject act = hostActivity();
+	const QJniObject act = AndroidJni::activity();
 	if (!act.isValid()) {
 		if (detail)
 			*detail = QStringLiteral("updateRect: 拿不到 QtNative.activity()");

@@ -267,6 +267,10 @@ void OBSQTDisplay::CreateDisplay()
 	QString attachDetail;
 	if (!obsAndroidDisplayAttach(r.x(), r.y(), r.width(), r.height(), &attachDetail)) {
 		obsAndroidDisplayLog("CreateDisplay: attach 失败，不建 obs_display —— %s", qUtf8Printable(attachDetail));
+		/* claim 已经成功，但这次没有面可交付：必须把槽还回去，否则其它 OBSQTDisplay
+		 * 永远抢不到 lifecycle，主预览会一直黑屏。若这次是 preempt，release 会负责把被
+		 * 挂起的旧 owner 重新 promote 回来。 */
+		obsAndroidDisplayReleaseLifecycle(this);
 		return;
 	}
 
@@ -275,6 +279,9 @@ void OBSQTDisplay::CreateDisplay()
 				     qUtf8Printable(obsAndroidDisplayStatus()));
 		QString detachDetail;
 		obsAndroidDisplayDetach(&detachDetail);
+		/* 先 detach 再 release：新 owner 的 SurfaceView 必须先摘掉，旧 owner 才能在
+		 * promote 后重新 attach 一块干净的面。 */
+		obsAndroidDisplayReleaseLifecycle(this);
 		return;
 	}
 
@@ -352,6 +359,26 @@ bool OBSQTDisplay::createDisplayFromExistingSurface()
  * 重建必须重发 DisplayCreated，OBSBasic::addDisplay 才会把 RenderMain 挂到这块新 obs_display 上。 */
 void OBSQTDisplay::onAndroidSurfaceEvent(int what)
 {
+	/* 已排队到 Qt 主线程的 surface 回调可能在 owner 已经换人之后才到达。
+	 * Revoked 是发给被挂起的旧 owner 的，必须处理；Granted 只应发给当前 owner；
+	 * 其余 surface 事件只有当前 owner 才有资格重建/销毁。 */
+	if (what != ObsAndroidSurfaceRevoked && what != ObsAndroidSurfaceGranted) {
+		QObject *owner = obsAndroidDisplayLifecycleOwner();
+		if (owner != this) {
+			obsAndroidDisplayLog("surfaceEvent#%d 过期（owner=%p this=%p）→ 忽略", what, (void *)owner,
+					     (void *)this);
+			return;
+		}
+		if (androidSuspended) {
+			obsAndroidDisplayLog("surfaceEvent#%d 收到时本预览已 suspended → 忽略", what);
+			return;
+		}
+	}
+	if (what == ObsAndroidSurfaceGranted && !obsAndroidDisplayIsLifecycleOwner(this)) {
+		obsAndroidDisplayLog("surfaceEvent: 过期 Granted（this=%p 已不是 owner）→ 忽略", (void *)this);
+		return;
+	}
+
 	/* B-7 甲的两条 native 合成门铃（Java 只发 0~2）：让位/回位。
 	 * Revoked 时槽主**已经**换成投影仪了，所以 releaseDisplay 会走"不是主人 → 只交还
 	 * obs_display、不碰共享的 SurfaceView"那条分支 —— 正是要的：紧接着投影仪自己的 attach
