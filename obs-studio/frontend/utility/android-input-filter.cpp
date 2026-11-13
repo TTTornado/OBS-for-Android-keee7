@@ -7,15 +7,19 @@
 
 #include <QAbstractItemView>
 #include <QAbstractScrollArea>
+#include <QAbstractSpinBox>
 #include <QApplication>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QElapsedTimer>
 #include <QGestureEvent>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QScroller>
+#include <QTextEdit>
 #include <QTimer>
 #include <QWidget>
 
@@ -164,6 +168,17 @@ static void enableFlickScroll(QWidget *w)
 			     w->metaObject()->className(), int(areas.size()), grabbed, itemViews);
 }
 
+/* 文本编辑控件及其 viewport/子控件：长按是选择/光标操作，不应合成右键。 */
+static bool isTextEntryWidget(QWidget *widget)
+{
+	for (QWidget *w = widget; w; w = w->parentWidget()) {
+		if (qobject_cast<QLineEdit *>(w) || qobject_cast<QPlainTextEdit *>(w) ||
+		    qobject_cast<QTextEdit *>(w) || qobject_cast<QAbstractSpinBox *>(w))
+			return true;
+	}
+	return false;
+}
+
 class AndroidInputFilter : public QObject {
 public:
 	explicit AndroidInputFilter(QObject *parent, QWidget *(*mainWindow_)()) : QObject(parent), mainWindow(mainWindow_)
@@ -279,6 +294,11 @@ protected:
 			QMouseEvent *me = static_cast<QMouseEvent *>(ev);
 			if (me->button() != Qt::LeftButton)
 				break;
+			/* 文本控件优先排除：长按用于选中/移动光标，不能进入长按右键计时器。 */
+			if (isTextEntryWidget(pw)) {
+				obsAndroidDisplayLog("P8-PRESS 文本控件 %s → 跳过长按右键", pw->metaObject()->className());
+				break;
+			}
 			/* P-8 修法 v3（组合框）。b83 实测（.qoder/p8-b83/p8.txt）：弹层从来不是"打不开"，
 			 * 而是"开在松手之前的 1 ms 里、又被这发松手关掉"——
 			 *   41.811 PRESS→QComboBox「simpleOutRecFormat」 / 41.815 SHOW→QComboBoxPrivateContainer
