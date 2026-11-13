@@ -149,6 +149,13 @@ grep -iE "BUILD FAILED|FAILURE|CANNOT LINK|Exception|error:" "$LOGDIR/fe-$ABI-ap
 grep -iE "BUILD SUCCESSFUL|Android package built successfully" "$LOGDIR/fe-$ABI-apk-wsl.log" | tail -3
 [ "$APK_RC" = 0 ] || { echo "FATAL: androiddeployqt 出包失败，看 $LOGDIR/fe-$ABI-apk-wsl.log"; exit 1; }
 
+python3 "$SCRIPT_DIR/stage-qt-gradle-properties.py" \
+    --deployment-settings "$FE/android-obs-studio-deployment-settings.json" \
+    --output "$AB_DIR" \
+    --android-platform "android-$COMPILE_SDK_VERSION" \
+    --sdk "$SDK" \
+    --build-tools 36.0.0 || exit 1
+
 python3 "$SCRIPT_DIR/qt-android-ime/patch-qt-android-jar.py" \
     --qt-version 6.11.1 --jar "$QT/android_arm64_v8a/jar/Qt6Android.jar" \
     --android-jar "$SDK/platforms/android-$COMPILE_SDK_VERSION/android.jar" \

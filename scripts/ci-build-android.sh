@@ -501,6 +501,12 @@ package_apk() {
         --builddir "$fe" \
         --android-platform "$PLATFORM" \
         --release --aux-mode )
+    python3 "$SCRIPT_DIR/stage-qt-gradle-properties.py" \
+        --deployment-settings "$fe/android-obs-studio-deployment-settings.json" \
+        --output "$ab_dir" \
+        --android-platform "$PLATFORM" \
+        --sdk "$SDK" \
+        --build-tools "$BUILD_TOOLS"
     python3 "$SCRIPT_DIR/qt-android-ime/patch-qt-android-jar.py" \
         --qt-version "$QT_VERSION" --jar "$QT/android_arm64_v8a/jar/Qt6Android.jar" \
         --android-jar "$SDK/platforms/$PLATFORM/android.jar" --javac "$JAVA_HOME/bin/javac" \

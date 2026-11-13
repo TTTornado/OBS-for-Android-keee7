@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet('configure','build','package','all')][string]$Action = 'all',
     [string]$ToolsRoot = (Join-Path (Split-Path $PSScriptRoot -Parent | Split-Path -Parent) 'build-tools'),
     [int]$Jobs = 8,
@@ -120,6 +120,10 @@ if ($Action -in @('package','all')) {
     $unsigned = Join-Path $androidBuild 'obs-studio-test.apk'
     Invoke-BuildTool $deploy @('--input', "$build/frontend/android-obs-studio-deployment-settings.json",
         '--output', $androidBuild, '--apk', $unsigned, '--android-platform', "android-$CompileSdkVersion", '--release', '--aux-mode') 'android-stage.log'
+    Invoke-BuildTool 'python' @("$PSScriptRoot/stage-qt-gradle-properties.py",
+        '--deployment-settings', "$build/frontend/android-obs-studio-deployment-settings.json",
+        '--output', $androidBuild, '--android-platform', "android-$CompileSdkVersion",
+        '--sdk', $sdk, '--build-tools', '36.0.0') 'gradle-props.log'
     # Patch the staged runtime only. A second androiddeployqt invocation would
     # overwrite it with the pristine SDK jar, so build directly with Gradle.
     $patchedQtJar = Join-Path $build 'qt-ime-patched/Qt6Android.jar'
