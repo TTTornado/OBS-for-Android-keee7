@@ -47,8 +47,8 @@ permissions:
 jobs:
   build:
     name: Build arm64-v8a APK
-    # Ubuntu 24.04：自带 JDK 17、NDK r30、Android SDK (36/36.0.0)、CMake 3.31.6 与 Gradle 9.8.2。
-    # 仅需自行拉取 Qt，并用 setup-gradle 管理 Gradle 依赖缓存。
+    # Ubuntu 24.04：自带 JDK 17、NDK r30、Android SDK (36/36.0.0) 与 CMake 3.31.6。
+    # 由 workflow 开头通过 setup-gradle 锁定 Gradle 版本、aqt 安装并缓存 Qt。
     runs-on: ubuntu-24.04
     timeout-minutes: 180
 
@@ -62,7 +62,7 @@ jobs:
       # 工具链版本。runner 环境准备在 workflow 开头统一完成；BUILD_TOOLS / PLATFORM 用于配置与签名校验。
       NDK_VERSION: r30
       QT_VERSION: 6.11.1
-      GRADLE_VERSION: system
+      GRADLE_VERSION: '9.3.1'
       BUILD_TOOLS: 36.0.0
       PLATFORM: android-36
       # 下载物放到工作区**外**（$GITHUB_WORKSPACE/.. 就是 runner 的 work 目录；
@@ -81,9 +81,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle cache
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       - name: Install host build tools
