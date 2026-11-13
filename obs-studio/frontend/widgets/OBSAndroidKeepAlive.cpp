@@ -6,6 +6,7 @@
 
 #include <QJniObject>
 
+#include <chrono>
 #include <mutex>
 #include <cstring>
 
@@ -25,6 +26,8 @@ static QString callDescribe()
  * 只是给通知栏文案去重用的；真正的服务状态以 Java 侧 instance/计数器为准（describe 里能看到）。 */
 static std::mutex g_keepAliveMutex;
 static bool g_running = false;
+static bool g_startPending = false;
+static std::chrono::steady_clock::time_point g_startRequestedAt;
 static QString g_state;
 
 struct CaptureSources { bool camera = false; bool microphone = false; };
@@ -53,21 +56,52 @@ bool obsAndroidKeepAliveSetRunning(bool running, const char *state, QString *det
 	const QString what = state ? QString::fromUtf8(state) : QStringLiteral("running");
 	QString jstatus;
 	bool repeat = false;
+	bool javaReady = false;
+	if (running && activity.isValid())
+		javaReady = QJniObject::callStaticMethod<jboolean>(kServiceClass, "isForegroundReady", "()Z") != 0;
 
 	{
 		std::lock_guard<std::mutex> lk(g_keepAliveMutex);
-		if (!running && !g_running) {
+
+		/* start() 只是"请求已发出"；真正的前台档在 onStartCommand→startForeground 里。
+		 * 在它落定之前保持 pending，不让看门狗每秒重复 start，也不把 g_running 提前写成 true。 */
+		if (running && g_startPending) {
+			if (javaReady) {
+				g_startPending = false;
+				g_running = true;
+				g_state = what;
+				if (detail)
+					*detail = QStringLiteral("前台服务已进入前台档(%1)").arg(what);
+				return true;
+			}
+			if (std::chrono::steady_clock::now() - g_startRequestedAt < std::chrono::seconds(5)) {
+				if (detail)
+					*detail = QStringLiteral("前台服务启动中(%1)，等待 onStartCommand").arg(what);
+				return true;
+			}
+			/* 超时：允许下一次真正的 start() 重试。 */
+			g_startPending = false;
+		}
+
+		if (!running && !g_running && !g_startPending) {
 			if (detail)
 				*detail = QStringLiteral("本来就没在跑，忽略 stop");
 			return true;
 		}
-		/* 3-5 看门狗每秒复核一次：状态没变就别再惊动 Java（重复 startForeground 会每秒重刷通知）。 */
+		if (!running && g_startPending) {
+			/* stop 与 start 撞车：先清 pending，下面照常发 stopService。 */
+			g_startPending = false;
+		}
+		/* 3-5 看门狗每秒复核一次：状态没变就别再惊动 Java（重复 startForeground 会每秒重刷通知）。
+		 * 但如果 Java 侧已经不是前台档（服务被杀/onDestroy），必须重新发起，不能信旧 g_running。 */
 		repeat = running && g_running && g_state == what;
+		if (repeat && !javaReady)
+			g_running = false;
 	}
 
-	if (repeat) {
+	if (repeat && javaReady) {
 		if (detail)
-			*detail = QStringLiteral("已在跑(%1)，忽略重复").arg(what);
+			*detail = QStringLiteral("已在前台档(%1)，忽略重复").arg(what);
 		return true;
 	}
 
@@ -97,7 +131,14 @@ bool obsAndroidKeepAliveSetRunning(bool running, const char *state, QString *det
 	 * 可以在后台被系统杀掉而不再有任何重试。 */
 	if (ok) {
 		std::lock_guard<std::mutex> lk(g_keepAliveMutex);
-		g_running = running;
+		if (running) {
+			g_startPending = true;
+			g_startRequestedAt = std::chrono::steady_clock::now();
+			g_running = false; /* 等 isForegroundReady() 确认 */
+		} else {
+			g_startPending = false;
+			g_running = false;
+		}
 		g_state = what;
 	}
 
@@ -105,7 +146,7 @@ bool obsAndroidKeepAliveSetRunning(bool running, const char *state, QString *det
 	const QString verb = running ? QStringLiteral("起前台服务(%1)").arg(what) : QStringLiteral("停前台服务");
 	const QString line = QStringLiteral("%1 %2：%3")
 				     .arg(verb)
-				     .arg(ok ? QStringLiteral("成功") : QStringLiteral("失败"))
+				     .arg(ok ? (running ? QStringLiteral("已发起") : QStringLiteral("成功")) : QStringLiteral("失败"))
 				     .arg(jstatus);
 	if (detail)
 		*detail = line;
