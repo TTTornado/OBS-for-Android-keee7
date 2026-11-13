@@ -94,21 +94,28 @@ def _uses_integer_compile_sdk(build_gradle: Path) -> bool:
     return False
 
 
-def _resolve_qt_dir(settings: dict) -> tuple[str, list[str]]:
+def _resolve_abi_value(raw_val: object, abi: str, default: str = "") -> str:
+    if isinstance(raw_val, dict):
+        v = raw_val.get(abi)
+        return str(v) if v else default
+    if isinstance(raw_val, str) and raw_val:
+        return raw_val
+    return default
+
+
+def _resolve_qt_paths(settings: dict) -> tuple[str, str, list[str]]:
     archs = settings.get("architectures") or {}
     enabled_abis = [abi for abi, triple in archs.items() if triple is not None]
     if not enabled_abis:
         raise ValueError("No enabled architectures in deployment settings")
 
-    qt_val = settings.get("qt")
-    if isinstance(qt_val, dict):
-        for abi in enabled_abis:
-            if qt_val.get(abi):
-                return str(qt_val[abi]), enabled_abis
-        raise ValueError("No Qt install directory matching enabled ABIs")
-    if isinstance(qt_val, str) and qt_val:
-        return qt_val, enabled_abis
-    raise ValueError("Missing 'qt' entry in deployment settings")
+    for abi in enabled_abis:
+        qt_dir = _resolve_abi_value(settings.get("qt"), abi)
+        if qt_dir:
+            qt_data_dir = _resolve_abi_value(settings.get("qtDataDirectory"), abi, default=".")
+            return qt_dir, qt_data_dir, enabled_abis
+
+    raise ValueError("Missing matching 'qt' entry for enabled ABIs in deployment settings")
 
 
 def main() -> int:
@@ -135,8 +142,7 @@ def main() -> int:
     if not sdk_path:
         raise ValueError("Android SDK path could not be resolved")
 
-    qt_dir, enabled_abis = _resolve_qt_dir(settings)
-    qt_data_dir = settings.get("qtDataDirectory") or "."
+    qt_dir, qt_data_dir, enabled_abis = _resolve_qt_paths(settings)
     qt_java_dir = (Path(qt_dir) / qt_data_dir / "src/android/java").as_posix()
     template_props_path = Path(qt_dir) / qt_data_dir / "src/3rdparty/gradle/gradle.properties"
 
