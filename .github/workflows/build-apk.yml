@@ -94,10 +94,14 @@ jobs:
       - name: Install host build tools
         timeout-minutes: 10
         run: |
-          # ubuntu-24.04 runner 已预装 7zip/ninja/gcc/g++/make/curl/unzip/zip/ca-certificates/
-          # patch/pkg-config/dpkg-dev/autoconf/automake/libtool，仅安装镜像缺失且构建/宿主测试必需的包。
+          # 7-Zip：Ubuntu 24.04 上 **p7zip-full 已变成 transitional 包**，不再提供
+          # /usr/bin/7z；提供二进制的是 7zip 包（7z/7za/7zr）。所以这里装 7zip。
+          # autoconf/automake/libtool：deps-android 里部分依赖走 autoconf（autoreconf -fi），缺了会直接失败。
+          # 基础包大多已预装在 runner 镜像中（apt 会直接跳过，几乎零耗时），显式保留以避免镜像调整导致缺失；
+          # 仅去掉 arm64 打包用不到的 x86 汇编器 nasm/yasm。
           host_packages=(
-            ccache
+            7zip ninja-build build-essential curl unzip zip ca-certificates
+            patch pkg-config dpkg-dev autoconf automake libtool ccache
             libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev python3-pil
           )
