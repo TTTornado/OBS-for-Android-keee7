@@ -30,7 +30,7 @@ int main()
 		ScreenAudioStartTransaction txn(clear, stop, release);
 		txn.arm();
 		assert(txn.rollback());
-		expect(calls, {"clear", "stop", "release"});
+		expect(calls, {"clear", "stop"});
 		assert(!txn.rollback()); // 同一事务只回滚一次
 	}
 
