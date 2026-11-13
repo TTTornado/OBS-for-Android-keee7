@@ -137,6 +137,13 @@ jobs:
           "$RUNNER_TEMP/android-layout-test"
           echo "::endgroup::"
 
+          echo "::group::Screen audio start rollback"
+          c++ -std=c++17 -Wall -Wextra -Werror -Iobs-studio/frontend/widgets \
+            scripts/android-screen/screen-audio-start-rollback-test.cpp \
+            -o "$RUNNER_TEMP/screen-audio-start-rollback-test"
+          "$RUNNER_TEMP/screen-audio-start-rollback-test"
+          echo "::endgroup::"
+
           echo "::group::UVC transport and recovery"
           bash scripts/test-android-uvc.sh
           echo "::endgroup::"

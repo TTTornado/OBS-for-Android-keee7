@@ -1,5 +1,6 @@
 #include "OBSAndroidPermissions.hpp"
 #include "OBSAndroidScreenGpuHost.hpp"
+#include "ScreenAudioStartTransaction.hpp"
 
 #ifdef __ANDROID__
 
@@ -259,22 +260,24 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 	}
 
 	/* startAudio 已经成功（返回了数组）之后，任何失败都必须把 Java 侧 AudioRecord 停掉，
-	 * 否则调用方只看到 false，Java 侧的录音线程仍在跑。 */
-	auto fail_start = [&]() -> bool {
-		/* Raw JNI calls can leave an exception pending (for example OOM).
-		 * Clear it before making the Java call that stops AudioRecord. */
-		if (je->ExceptionCheck())
-			je->ExceptionClear();
-		QJniObject::callStaticMethod<void>(kProjectionClass, "stopAudio", "()V");
-		return false;
-	};
+	 * 否则调用方只看到 false，Java 侧的录音线程仍在跑。事务顺序固定为：
+	 * 清 pending exception → stopAudio → 释放本次创建的 scratch。 */
+	ScreenAudioStartTransaction txn(
+		[&] {
+			if (je->ExceptionCheck())
+				je->ExceptionClear();
+		},
+		[&] { QJniObject::callStaticMethod<void>(kProjectionClass, "stopAudio", "()V"); },
+		[&] { audioReleaseScratch(); });
+	txn.arm();
 
 	const jintArray ja = arr.object<jintArray>();
 	const jsize n = je->GetArrayLength(ja);
 	jint *els = (n >= 2) ? je->GetIntArrayElements(ja, nullptr) : nullptr;
 	if (!els) {
 		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录格式读不到（数组长度=%d）", (int)n);
-		return fail_start();
+		txn.rollback();
+		return false;
 	}
 	const jint rate = els[0];
 	const jint ch = els[1];
@@ -283,7 +286,8 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 	if (rate <= 0 || ch <= 0) {
 		blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录格式不成立 %dHz×%d，Java 侧=%s", (int)rate,
 		     (int)ch, screenDescribe().toUtf8().constData());
-		return fail_start();
+		txn.rollback();
+		return false;
 	}
 
 	/* 缓冲按“一秒”建：48k 立体声 = 96000 个 short = 192 KB，一次性的代价，换来读那一格零分配。
@@ -296,18 +300,22 @@ static bool screenStartAudio(void *param, uint32_t *sample_rate, uint32_t *chann
 		jshortArray fresh = je->NewShortArray(need);
 		if (!fresh) {
 			blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录缓冲建不出来（%d 个 short）", (int)need);
-			return fail_start();
+			txn.rollback();
+			return false;
 		}
 		g_audioScratch = (jshortArray)je->NewGlobalRef(fresh);
 		je->DeleteLocalRef(fresh);
 		if (!g_audioScratch) {
 			blog(LOG_WARNING, "OBSAndroidPermissions[Android]: 内录缓冲 global ref 建不出来");
-			return fail_start();
+			txn.rollback();
+			return false;
 		}
 		g_audioScratchShorts = need;
 		g_audioScratchChannels = (uint32_t)ch;
+		txn.markScratchCreated();
 	}
 
+	txn.commit();
 	if (sample_rate)
 		*sample_rate = (uint32_t)rate;
 	if (channels)
