@@ -1622,7 +1622,12 @@ static void androidSyncPreviewVisibility()
 		}
 	}
 
-	obsAndroidDisplaySetVisible(!covered);
+	const bool visibleAccepted = obsAndroidDisplaySetVisible(!covered);
+	if (qEnvironmentVariable("OBS_ANDROID_PREVIEW_DIAGNOSTICS") == QLatin1String("1")) {
+		obsAndroidDisplayLog("PREVIEW-SYNC owner=%p ownerWindow=%p modal=%p popup=%p covered=%d accepted=%d",
+				     (void *)surfaceOwner, (void *)ownerWindow, (void *)modal,
+				     (void *)qApp->activePopupWidget(), int(covered), int(visibleAccepted));
+	}
 }
 
 /* Android 触摸/按键补齐（长按=右键、BACK=Escape）由 utility/android-input-filter.cpp 提供；
@@ -1631,6 +1636,14 @@ static void androidSyncPreviewVisibility()
 static void androidResyncPreviewOnWindowToggle(QObject *receiver, QEvent *e)
 {
 	const QEvent::Type type = e->type();
+	if (qEnvironmentVariable("OBS_ANDROID_PREVIEW_DIAGNOSTICS") == QLatin1String("1") &&
+	    receiver->isWidgetType()) {
+		QWidget *rw = static_cast<QWidget *>(receiver);
+		if (rw->isWindow())
+			obsAndroidDisplayLog("PREVIEW-EVT type=%d cls=%s obj=%s visible=%d", int(type),
+					     rw->metaObject()->className(), rw->objectName().toUtf8().constData(),
+					     int(rw->isVisible()));
+	}
 	/* 顺带认 Close：组合框弹层（QComboBoxPrivateContainer）关闭时只发 Close、不发 Hide
 	 *（2026-11-08 16:26 实测），多认一种事件类型没坏处。
 	 * 但**别指望它救黑屏**——真正那条路是 QDialog 关闭时**什么都不发**（见下面
