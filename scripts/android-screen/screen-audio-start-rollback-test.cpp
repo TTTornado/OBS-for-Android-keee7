@@ -1,12 +1,22 @@
 #include "ScreenAudioStartTransaction.hpp"
 
 #include <cassert>
+#include <cstdio>
 #include <string>
 #include <vector>
 
 static void expect(const std::vector<std::string> &actual, const std::vector<std::string> &expected)
 {
-	assert(actual == expected);
+	if (actual == expected)
+		return;
+	std::fprintf(stderr, "rollback order mismatch; actual:");
+	for (const std::string &call : actual)
+		std::fprintf(stderr, " %s", call.c_str());
+	std::fprintf(stderr, "; expected:");
+	for (const std::string &call : expected)
+		std::fprintf(stderr, " %s", call.c_str());
+	std::fprintf(stderr, "\n");
+	std::abort();
 }
 
 int main()
