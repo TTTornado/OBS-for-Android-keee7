@@ -61,15 +61,28 @@ resolve_sdk() {
     echo "$TOOLS_ROOT/android-sdk"
 }
 
+ndk_matches_version() {
+    local dir="$1"
+    [ -n "$dir" ] && [ -f "$dir/source.properties" ] || return 1
+    grep -Eq "^Pkg\.ReleaseName *= *${NDK_VERSION}[[:space:]]*$" "$dir/source.properties"
+}
+
 resolve_ndk() {
-    local cand props
-    for cand in "${ANDROID_NDK_ROOT:-}" "${ANDROID_NDK_HOME:-}" "$TOOLS_ROOT/ndk/android-ndk-$NDK_VERSION"; do
-        [ -n "$cand" ] && [ -f "$cand/source.properties" ] && { echo "$cand"; return 0; }
-    done
-    for props in "$SDK"/ndk/*/source.properties /usr/local/lib/android/sdk/ndk/*/source.properties; do
-        [ -f "$props" ] || continue
-        if grep -Eq "^Pkg\.ReleaseName *= *${NDK_VERSION}[[:space:]]*$" "$props"; then
-            dirname "$props"
+    if [ -n "${NDK:-}" ] && [ -f "$NDK/source.properties" ]; then
+        echo "$NDK"
+        return 0
+    fi
+    local cand
+    # Runner 默认会把 ANDROID_NDK_ROOT 指到旧版本（如 r27d），必须校验 Pkg.ReleaseName == NDK_VERSION。
+    for cand in \
+        "${ANDROID_NDK_ROOT:-}" \
+        "${ANDROID_NDK_HOME:-}" \
+        "${ANDROID_NDK_LATEST_HOME:-}" \
+        "$TOOLS_ROOT/ndk/android-ndk-$NDK_VERSION" \
+        "$SDK"/ndk/* \
+        /usr/local/lib/android/sdk/ndk/*; do
+        if ndk_matches_version "$cand"; then
+            echo "$cand"
             return 0
         fi
     done
@@ -89,6 +102,7 @@ export ANDROID_SDK_ROOT="$SDK"
 export ANDROID_HOME="$SDK"
 export ANDROID_NDK_ROOT="$NDK"
 export ANDROID_NDK_HOME="$NDK"
+export ANDROID_NDK="$NDK"
 if [ -z "${JAVA_HOME:-}" ]; then
     for _jvm in /usr/lib/jvm/temurin-17-jdk-amd64 /usr/lib/jvm/java-17-openjdk-amd64; do
         [ -d "$_jvm" ] && { JAVA_HOME="$_jvm"; break; }
