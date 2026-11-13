@@ -59,20 +59,15 @@ jobs:
       contents: write
 
     env:
-      # 工具链版本。NDK/SDK/Gradle/CMake 优先复用 runner 自带；TOOLS_ROOT 主要用于缓存 Qt。
+      # 工具链版本。runner 环境准备在 workflow 开头统一完成；BUILD_TOOLS / PLATFORM 用于配置与签名校验。
       NDK_VERSION: r30
       QT_VERSION: 6.11.1
       GRADLE_VERSION: system
       BUILD_TOOLS: 36.0.0
       PLATFORM: android-36
-      # 两个落盘目录都只用 github 上下文（job 级 env 的可用上下文里没有 runner.*，
-      # 写 runner.temp 会直接 "Unrecognized named-value: 'runner'"）。
-      # 也别写成裸 $GITHUB_WORKSPACE：env 的值不会做二次展开，那会变成一个字面量目录名，
-      # 连带把下面的缓存 path 也搞错。
-      # TOOLS_ROOT 必须与 cache 的 path 一致。
-      TOOLS_ROOT: ${{ github.workspace }}/.ci-tools
-      # 下载物放到工作区**外**（$GITHUB_WORKSPACE/.. 就是 runner 的 work 目录）：
-      # 它有几 GB，放进 TOOLS_ROOT 会被工具链缓存反复打包。
+      # 下载物放到工作区**外**（$GITHUB_WORKSPACE/.. 就是 runner 的 work 目录；
+      # job 级 env 里没有 runner.* 上下文，也不能直接写 $GITHUB_WORKSPACE）：
+      # 它有几 GB，不能被工作区或缓存打包。
       DL_ROOT: ${{ github.workspace }}/../obs-dl
 
     steps:
@@ -122,6 +117,29 @@ jobs:
           for c in 7z 7zz 7za 7zr; do command -v "$c" >/dev/null 2>&1 && { echo "7-Zip: $c"; break; }; done
           # 确认 autoreconf 就位（依赖构建的硬前提）
           autoreconf --version | head -1
+
+      - name: Cache Qt toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/Qt
+          key: obsqt-v2-${{ runner.os }}-qt${{ env.QT_VERSION }}
+
+      - name: Install Qt toolchain
+        run: |
+          set -euo pipefail
+          QT_DIR="$HOME/Qt/$QT_VERSION"
+          if [ -x "$QT_DIR/gcc_64/bin/androiddeployqt" ]; then
+            echo "Qt 已就位：$QT_DIR"
+            exit 0
+          fi
+          pip install --quiet aqtinstall
+          mkdir -p "$HOME/Qt"
+          aqt install-qt all_os android "$QT_VERSION" android_arm64_v8a -O "$HOME/Qt"
+          aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$HOME/Qt"
+          [ -x "$QT_DIR/gcc_64/bin/androiddeployqt" ] || {
+            echo "FATAL: Qt 宿主缺 androiddeployqt（aqt 安装不完整？）" >&2
+            exit 1
+          }
 
       # ---- ccache：编译对象缓存（deps 与主构建共用一份） ----
       # key 带 sha + run_attempt：同一提交的手动 re-run 不会因 immutable key 报
@@ -174,12 +192,6 @@ jobs:
             deps-android/prebuilt
           key: obsdeps-${{ runner.os }}-ndk${{ env.NDK_VERSION }}-${{ steps.depkey.outputs.hash }}
 
-      - name: Cache Qt toolchain
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.TOOLS_ROOT }}
-          key: obsqt-${{ runner.os }}-qt${{ env.QT_VERSION }}
-
       # 独立一步恢复密钥：这样"有没有密钥"的判断只在一处，构建步骤里不再套条件表达式。
       - name: Restore signing keystore from secrets
         id: keystore
@@ -225,7 +237,7 @@ jobs:
       - name: Check property editor diagnostics with host Qt
         run: |
           set -euo pipefail
-          HOST_QT="$TOOLS_ROOT/Qt/$QT_VERSION/gcc_64"
+          HOST_QT="$HOME/Qt/$QT_VERSION/gcc_64"
           CMAKE_BIN="$(command -v cmake)"
           CTEST_BIN="$(command -v ctest)"
           "$CMAKE_BIN" -S scripts/ime-diagnostics-test -B "$RUNNER_TEMP/obs-ime-test" -G Ninja \
@@ -328,10 +340,10 @@ jobs:
         if: failure()
         run: |
           {
-            echo "=== 工具链目录 ==="
-            ls -1 "$TOOLS_ROOT" 2>/dev/null || true
+            echo "=== Qt 目录 ==="
+            ls -1 "$HOME/Qt" 2>/dev/null || true
             echo "=== SDK 平台 / build-tools ==="
-            for sdk_dir in "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk "$TOOLS_ROOT/android-sdk"; do
+            for sdk_dir in "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk; do
               [ -d "$sdk_dir" ] || continue
               echo "--- $sdk_dir ---"
               ls -1 "$sdk_dir/platforms" "$sdk_dir/build-tools" 2>/dev/null || true
@@ -351,7 +363,7 @@ jobs:
             done
             echo "=== 磁盘 ==="
             df -h / 2>/dev/null || true
-            du -sh "$TOOLS_ROOT" "$DL_ROOT" 2>/dev/null || true
+            du -sh "$HOME/Qt" "$DL_ROOT" 2>/dev/null || true
           } | tee diagnostics.txt
           echo "::group::失败诊断摘要"
           cat diagnostics.txt
