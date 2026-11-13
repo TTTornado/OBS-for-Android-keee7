@@ -11,15 +11,15 @@
 # deps-android/prebuilt/，workflow 里用 actions/cache 缓存。首次构建最慢，命中后很快。
 #
 # 环境变量（都有默认值）：
-#   NDK_VERSION     默认 r30
+#   NDK_VERSION     默认 r30（若系统 SDK 已预装对应版本则自动复用）
 #   QT_VERSION      默认 6.11.1
-#   CMAKE_VERSION   默认 3.31.6（必须 >= 3.28：obs-studio 的 cmake_minimum_required 是 3.28...3.30）
+#   CMAKE_VERSION   默认 3.31.6（必须 >= 3.28：obs-studio 的 cmake_minimum_required 是 3.28...3.30；系统已满足则复用）
 #   CMDLINE_TOOLS   默认 13114758
-#   GRADLE_VERSION  默认 9.3.1
-#   BUILD_TOOLS     默认 36.0.0
-#   PLATFORM        默认 android-36
+#   GRADLE_VERSION  默认 9.3.1（设为 system 或系统已装 >= 9.0 时直接复用系统 gradle）
+#   BUILD_TOOLS     默认 36.0.0（若系统 SDK 已预装则自动复用）
+#   PLATFORM        默认 android-36（若系统 SDK 已预装则自动复用）
 #   JOBS            默认 nproc
-#   TOOLS_ROOT      工具链落盘位置（workflow 缓存它），默认 $HOME/android-ci-tools
+#   TOOLS_ROOT      自行拉取的工具链落盘位置（workflow 缓存它，通常仅含 Qt），默认 $HOME/android-ci-tools
 #   DL_ROOT         下载物落盘位置（**不**缓存），默认 $TOOLS_ROOT-dl
 #   SIGN_KEYSTORE   给了且文件存在就签名；否则只出未签名包
 #   SIGN_KEY_ALIAS / SIGN_STORE_PASS / SIGN_KEY_PASS  签名三件套
@@ -43,10 +43,43 @@ JOBS="${JOBS:-$(nproc)}"
 TOOLS_ROOT="${TOOLS_ROOT:-$HOME/android-ci-tools}"
 DL_ROOT="${DL_ROOT:-$TOOLS_ROOT-dl}"
 
-NDK="$TOOLS_ROOT/ndk/android-ndk-$NDK_VERSION"
+# 语义化版本比较：$1 >= $2 返回 0。
+version_ge() {
+    [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]
+}
+
+resolve_sdk() {
+    local cand
+    for cand in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}" "/usr/local/lib/android/sdk"; do
+        [ -n "$cand" ] || continue
+        if [ -f "$cand/platforms/$PLATFORM/android.jar" ] &&
+           [ -x "$cand/build-tools/$BUILD_TOOLS/apksigner" ]; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    echo "$TOOLS_ROOT/android-sdk"
+}
+
+resolve_ndk() {
+    local cand props
+    for cand in "${ANDROID_NDK_ROOT:-}" "${ANDROID_NDK_HOME:-}" "$TOOLS_ROOT/ndk/android-ndk-$NDK_VERSION"; do
+        [ -n "$cand" ] && [ -f "$cand/source.properties" ] && { echo "$cand"; return 0; }
+    done
+    for props in "$SDK"/ndk/*/source.properties /usr/local/lib/android/sdk/ndk/*/source.properties; do
+        [ -f "$props" ] || continue
+        if grep -Eq "^Pkg\.ReleaseName *= *${NDK_VERSION}[[:space:]]*$" "$props"; then
+            dirname "$props"
+            return 0
+        fi
+    done
+    echo "$TOOLS_ROOT/ndk/android-ndk-$NDK_VERSION"
+}
+
 QT="$TOOLS_ROOT/Qt/$QT_VERSION"
 HOST="$QT/gcc_64"
-SDK="$TOOLS_ROOT/android-sdk"
+SDK="$(resolve_sdk)"
+NDK="$(resolve_ndk)"
 GRADLE_HOME="$TOOLS_ROOT/gradle-$GRADLE_VERSION"
 CMAKE_HOME="$TOOLS_ROOT/cmake-$CMAKE_VERSION-linux-x86_64"
 BUILD_DIR="$ROOT/build-fe-$ABI-ci"
@@ -56,8 +89,14 @@ export ANDROID_SDK_ROOT="$SDK"
 export ANDROID_HOME="$SDK"
 export ANDROID_NDK_ROOT="$NDK"
 export ANDROID_NDK_HOME="$NDK"
+if [ -z "${JAVA_HOME:-}" ]; then
+    for _jvm in /usr/lib/jvm/temurin-17-jdk-amd64 /usr/lib/jvm/java-17-openjdk-amd64; do
+        [ -d "$_jvm" ] && { JAVA_HOME="$_jvm"; break; }
+    done
+fi
 export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
-export GRADLE_USER_HOME="$TOOLS_ROOT/gradle-cache"
+# 尊重调用方或 setup-gradle 管理的标准 ~/.gradle，不再强塞进 TOOLS_ROOT（避免缓存耦合膨胀）。
+export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
 export PATH="$CMAKE_HOME/bin:$GRADLE_HOME/bin:$SDK/platform-tools:$SDK/cmdline-tools/latest/bin:$JAVA_HOME/bin:$PATH"
 
 log() { echo ""; echo "########## $* ##########"; }
@@ -101,11 +140,19 @@ find_sevenzip() {
 # ---------------------------------------------------------------- 工具链
 
 fetch_cmake() {
-    # 系统自带的可能低于 3.28（Ubuntu 22.04 是 3.22），而 obs-studio 要求 3.28+。
-    # 用一个固定版本、随工具链缓存，避免"runner 换镜像导致 CMake 版本漂移"。
+    # obs-studio 要求 CMake >= 3.28：若宿主机/runner 已预装满足要求的 CMake（如 ubuntu-24.04 自带 3.31.6），
+    # 直接复用；仅在缺失或版本过低时才自行下载到 TOOLS_ROOT。
     if [ -x "$CMAKE_HOME/bin/cmake" ]; then
         echo "CMake 已就位：$("$CMAKE_HOME/bin/cmake" --version | head -1)"
         return
+    fi
+    if command -v cmake >/dev/null 2>&1; then
+        local sys_ver
+        sys_ver="$(cmake --version 2>/dev/null | sed -n 's/^cmake version //p' | head -1)"
+        if [ -n "$sys_ver" ] && version_ge "$sys_ver" "3.28"; then
+            echo "复用系统 CMake：$sys_ver ($(command -v cmake))"
+            return
+        fi
     fi
     log "下载 CMake $CMAKE_VERSION"
     mkdir -p "$TOOLS_ROOT" "$DL_ROOT"
@@ -117,7 +164,7 @@ fetch_cmake() {
 }
 
 fetch_ndk() {
-    [ -d "$NDK" ] && { echo "NDK 已就位：$NDK"; return; }
+    [ -f "$NDK/source.properties" ] && { echo "NDK 已就位：$NDK"; return; }
     log "下载 NDK $NDK_VERSION"
     mkdir -p "$TOOLS_ROOT/ndk" "$DL_ROOT"
     local zip="$DL_ROOT/android-ndk-$NDK_VERSION-linux.zip"
@@ -125,7 +172,7 @@ fetch_ndk() {
         "https://dl.google.com/android/repository/android-ndk-$NDK_VERSION-linux.zip"
     unzip -q "$zip" -d "$TOOLS_ROOT/ndk"
     rm -f "$zip"
-    [ -d "$NDK" ] || { echo "FATAL: 解压后没找到 $NDK" >&2; exit 1; }
+    [ -f "$NDK/source.properties" ] || { echo "FATAL: 解压后没找到 $NDK" >&2; exit 1; }
 }
 
 fetch_qt() {
@@ -200,22 +247,54 @@ fetch_sdk() {
         # 官方要求目录名恰好是 latest，否则 sdkmanager 认为布局不对。
         [ -d "$SDK/cmdline-tools/latest" ] || mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
     fi
-    log "安装 SDK 组件（$PLATFORM / build-tools $BUILD_TOOLS / platform-tools）"
-    yes 2>/dev/null | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-    "$SDK/cmdline-tools/latest/bin/sdkmanager" --install \
-        "platform-tools" "platforms;$PLATFORM" "build-tools;$BUILD_TOOLS" >/dev/null
-    # 让 SDK 布局里也能按 revision 找到 NDK（Gradle/AGP 会去 $SDK/ndk/<rev> 找）。
-    # 不重复下载几 GB：直接把已解包的 NDK 软链进去。
-    local rev
+    if [ ! -f "$SDK/platforms/$PLATFORM/android.jar" ] ||
+       [ ! -x "$SDK/build-tools/$BUILD_TOOLS/apksigner" ] ||
+       [ ! -x "$SDK/platform-tools/adb" ]; then
+        log "安装 SDK 组件（$PLATFORM / build-tools $BUILD_TOOLS / platform-tools）"
+        yes 2>/dev/null | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+        "$SDK/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platform-tools" "platforms;$PLATFORM" "build-tools;$BUILD_TOOLS" >/dev/null
+    else
+        echo "Android SDK 已就位：$SDK ($PLATFORM / build-tools $BUILD_TOOLS)"
+    fi
+    # 让 SDK 布局里也能按 revision 找到 NDK（Gradle/AGP 会去 $SDK/ndk/<rev> 找）；
+    # 若 NDK 本身就在 $SDK/ndk/<rev> 则跳过，避免自覆盖。
+    local rev target
     rev="$(sed -n 's/^Pkg\.Revision *= *//p' "$NDK/source.properties" | tr -d ' \r')"
     if [ -n "$rev" ]; then
-        mkdir -p "$SDK/ndk"
-        ln -sfn "$NDK" "$SDK/ndk/$rev"
+        target="$SDK/ndk/$rev"
+        if [ "$(readlink -f "$target" 2>/dev/null || true)" != "$(readlink -f "$NDK")" ]; then
+            mkdir -p "$SDK/ndk"
+            ln -sfn "$NDK" "$target"
+        fi
     fi
 }
 
+GRADLE_BIN="${GRADLE_BIN:-}"
 fetch_gradle() {
-    [ -x "$GRADLE_HOME/bin/gradle" ] && { echo "Gradle 已就位：$GRADLE_HOME"; return; }
+    if [ -n "$GRADLE_BIN" ] && [ -x "$GRADLE_BIN" ]; then
+        echo "Gradle 已指定：$GRADLE_BIN"
+        return
+    fi
+    if [ -x "$GRADLE_HOME/bin/gradle" ]; then
+        GRADLE_BIN="$GRADLE_HOME/bin/gradle"
+        echo "Gradle 已就位：$GRADLE_HOME"
+        return
+    fi
+    local sys_bin sys_ver=""
+    sys_bin="$(command -v gradle 2>/dev/null || true)"
+    if [ -n "$sys_bin" ]; then
+        sys_ver="$("$sys_bin" --version 2>/dev/null | awk '/^Gradle /{print $2; exit}')"
+        if [ "$GRADLE_VERSION" = "system" ] || { [ -n "$sys_ver" ] && version_ge "$sys_ver" "9.0"; }; then
+            GRADLE_BIN="$sys_bin"
+            echo "复用系统 Gradle：${sys_ver:-unknown} ($GRADLE_BIN)"
+            return
+        fi
+    fi
+    if [ "$GRADLE_VERSION" = "system" ]; then
+        echo "FATAL: GRADLE_VERSION=system，但 PATH 上找不到 gradle" >&2
+        exit 1
+    fi
     log "下载 Gradle $GRADLE_VERSION"
     mkdir -p "$TOOLS_ROOT" "$DL_ROOT"
     local zip="$DL_ROOT/gradle-$GRADLE_VERSION-bin.zip"
@@ -223,6 +302,7 @@ fetch_gradle() {
         "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
     unzip -q "$zip" -d "$TOOLS_ROOT"
     rm -f "$zip"
+    GRADLE_BIN="$GRADLE_HOME/bin/gradle"
 }
 
 # ---------------------------------------------------------------- 依赖
@@ -412,7 +492,7 @@ package_apk() {
         --android-jar "$SDK/platforms/$PLATFORM/android.jar" --javac "$JAVA_HOME/bin/javac" \
         --output "$BUILD_DIR/qt-ime-patched/Qt6Android.jar"
     cp -f "$BUILD_DIR/qt-ime-patched/Qt6Android.jar" "$ab_dir/libs/Qt6Android.jar"
-    "$GRADLE_HOME/bin/gradle" --no-daemon -p "$ab_dir" assembleRelease
+    "$GRADLE_BIN" --no-daemon -p "$ab_dir" assembleRelease
 
 
     local apk
@@ -479,10 +559,10 @@ log "环境"
 echo "repo      : $ROOT"
 echo "tools     : $TOOLS_ROOT"
 echo "downloads : $DL_ROOT"
-echo "ndk       : $NDK_VERSION"
+echo "ndk       : $NDK_VERSION ($NDK)"
 echo "qt        : $QT_VERSION"
 echo "cmake     : $CMAKE_VERSION"
-echo "gradle    : $GRADLE_VERSION"
+echo "gradle    : $GRADLE_VERSION (user_home=$GRADLE_USER_HOME)"
 echo "sdk       : $SDK  platform=$PLATFORM build-tools=$BUILD_TOOLS"
 echo "jobs      : $JOBS"
 echo "7-zip     : $SEVENZIP"
@@ -495,6 +575,7 @@ fetch_sdk
 fetch_gradle
 
 cmake --version | head -1
+"$GRADLE_BIN" --version | awk '/^Gradle /{print $0; exit}'
 
 build_deps
 

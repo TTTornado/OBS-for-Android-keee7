@@ -47,7 +47,8 @@ permissions:
 jobs:
   build:
     name: Build arm64-v8a APK
-    # Ubuntu 24.04：自带 JDK 17 与较新的系统库。NDK/Qt/SDK/Gradle/CMake 由脚本自己拉。
+    # Ubuntu 24.04：自带 JDK 17、NDK r30、Android SDK (36/36.0.0)、CMake 3.31.6 与 Gradle 9.8.2。
+    # 仅需自行拉取 Qt，并用 setup-gradle 管理 Gradle 依赖缓存。
     runs-on: ubuntu-24.04
     timeout-minutes: 180
 
@@ -58,11 +59,10 @@ jobs:
       contents: write
 
     env:
-      # 工具链版本。改这里 = 改 CI 工具链；缓存键里带这些值，改动会自动失效重建。
+      # 工具链版本。NDK/SDK/Gradle/CMake 优先复用 runner 自带；TOOLS_ROOT 主要用于缓存 Qt。
       NDK_VERSION: r30
       QT_VERSION: 6.11.1
-      CMAKE_VERSION: 3.31.6
-      GRADLE_VERSION: 9.3.1
+      GRADLE_VERSION: system
       BUILD_TOOLS: 36.0.0
       PLATFORM: android-36
       # 两个落盘目录都只用 github 上下文（job 级 env 的可用上下文里没有 runner.*，
@@ -86,18 +86,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
       - name: Install host build tools
         timeout-minutes: 10
         run: |
-          # 7-Zip：Ubuntu 24.04 上 **p7zip-full 已变成 transitional 包**，不再提供
-          # /usr/bin/7z；提供二进制的是 7zip 包（7z/7za/7zr）。所以这里装 7zip。
-          # autoconf/automake/libtool：deps-android 里 freetype/speexdsp/fdk-aac/rnnoise
-          #   走 autoconf 系（defs.sh 的 _autoconf_dep 首行就是 autoreconf -fi），缺了会直接失败。
-          # nasm/yasm：备 x86 汇编路径（本包是 arm64，一般用不到，但装了更稳）。
-          # pkg-config/dpkg-dev：交叉 pkg-config 与 dpkg 架构查询。
+          # ubuntu-24.04 runner 已预装 7zip/ninja/gcc/g++/make/curl/unzip/zip/ca-certificates/
+          # patch/pkg-config/dpkg-dev/autoconf/automake/libtool，仅安装镜像缺失且构建/宿主测试必需的包。
           host_packages=(
-            7zip ninja-build build-essential curl unzip zip ca-certificates
-            patch pkg-config dpkg-dev autoconf automake libtool nasm yasm ccache
+            ccache
             libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev python3-pil
           )
@@ -170,13 +170,11 @@ jobs:
             deps-android/prebuilt
           key: obsdeps-${{ runner.os }}-ndk${{ env.NDK_VERSION }}-${{ steps.depkey.outputs.hash }}
 
-      - name: Cache Android toolchain
+      - name: Cache Qt toolchain
         uses: actions/cache@v4
         with:
           path: ${{ env.TOOLS_ROOT }}
-          key: obstools-${{ runner.os }}-ndk${{ env.NDK_VERSION }}-qt${{ env.QT_VERSION }}-cm${{ env.CMAKE_VERSION }}-gr${{ env.GRADLE_VERSION }}-bt${{ env.BUILD_TOOLS }}
-          restore-keys: |
-            obstools-${{ runner.os }}-ndk${{ env.NDK_VERSION }}-qt${{ env.QT_VERSION }}-cm${{ env.CMAKE_VERSION }}-bt${{ env.BUILD_TOOLS }}
+          key: obsqt-${{ runner.os }}-qt${{ env.QT_VERSION }}
 
       # 独立一步恢复密钥：这样"有没有密钥"的判断只在一处，构建步骤里不再套条件表达式。
       - name: Restore signing keystore from secrets
@@ -224,8 +222,8 @@ jobs:
         run: |
           set -euo pipefail
           HOST_QT="$TOOLS_ROOT/Qt/$QT_VERSION/gcc_64"
-          CMAKE_BIN="$TOOLS_ROOT/cmake-$CMAKE_VERSION-linux-x86_64/bin/cmake"
-          CTEST_BIN="$TOOLS_ROOT/cmake-$CMAKE_VERSION-linux-x86_64/bin/ctest"
+          CMAKE_BIN="$(command -v cmake)"
+          CTEST_BIN="$(command -v ctest)"
           "$CMAKE_BIN" -S scripts/ime-diagnostics-test -B "$RUNNER_TEMP/obs-ime-test" -G Ninja \
             -DCMAKE_PREFIX_PATH="$HOST_QT" -DCMAKE_BUILD_TYPE=Release
           "$CMAKE_BIN" --build "$RUNNER_TEMP/obs-ime-test" --parallel 2
@@ -329,7 +327,12 @@ jobs:
             echo "=== 工具链目录 ==="
             ls -1 "$TOOLS_ROOT" 2>/dev/null || true
             echo "=== SDK 平台 / build-tools ==="
-            ls -1 "$TOOLS_ROOT/android-sdk/platforms" "$TOOLS_ROOT/android-sdk/build-tools" 2>/dev/null || true
+            for sdk_dir in "${ANDROID_SDK_ROOT:-}" /usr/local/lib/android/sdk "$TOOLS_ROOT/android-sdk"; do
+              [ -d "$sdk_dir" ] || continue
+              echo "--- $sdk_dir ---"
+              ls -1 "$sdk_dir/platforms" "$sdk_dir/build-tools" 2>/dev/null || true
+              break
+            done
             echo "=== CMake 配置日志尾部 ==="
             for f in build-fe-*/CMakeFiles/CMakeConfigureLog.yaml build-fe-*/CMakeFiles/CMakeError.log; do
               [ -f "$f" ] || continue
